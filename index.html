@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Sniping Game with Score</title>
+  <title>Sniping Game – Mobile Fire Button & Enhanced Difficulty</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
     /* Container for the game screen */
@@ -33,18 +33,36 @@
       display: flex;
       justify-content: center;
       align-items: center;
-      z-index: 10;
+      z-index: 20;
     }
     #overlayContent {
       background: #fff;
       padding: 20px;
       border-radius: 8px;
       text-align: center;
+      max-width: 300px;
     }
     #overlayContent input,
     #overlayContent button {
       margin: 10px 0;
       font-size: 16px;
+    }
+    /* Fire button: hidden by default (for desktop) and visible on touch devices */
+    #fireButton {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 10px 20px;
+      font-size: 18px;
+      z-index: 15;
+      display: none;
+    }
+    /* Show fire button on touch devices */
+    @media (hover: none) and (pointer: coarse) {
+      #fireButton {
+        display: block;
+      }
     }
   </style>
 </head>
@@ -59,6 +77,14 @@
           <input type="range" id="difficultySlider" min="1" max="10" value="5">
         </div>
         <div>
+          <label for="speedSlider">Speed Factor (affects horizontal and fall speed):</label><br>
+          <input type="range" id="speedSlider" min="0.5" max="2.0" step="0.1" value="1.0">
+        </div>
+        <div>
+          <label for="sizeSlider">Target Size (multiplier):</label><br>
+          <input type="range" id="sizeSlider" min="0.5" max="2.0" step="0.1" value="1.0">
+        </div>
+        <div>
           <label for="objectImageInput">Upload Object Image:</label><br>
           <input type="file" id="objectImageInput" accept="image/*">
         </div>
@@ -66,9 +92,14 @@
         <p style="font-size: 14px; color: gray;">(10 misses = game over)</p>
       </div>
     </div>
+
     <!-- The game canvas -->
     <canvas id="gameCanvas" width="800" height="600"></canvas>
+    
+    <!-- Fire button for mobile users -->
+    <button id="fireButton">Fire</button>
   </div>
+
   <script>
     document.addEventListener("DOMContentLoaded", () => {
       const container = document.getElementById("gameContainer");
@@ -78,31 +109,38 @@
       // Overlay and setup elements:
       const overlay = document.getElementById("overlay");
       const difficultySlider = document.getElementById("difficultySlider");
+      const speedSlider = document.getElementById("speedSlider");
+      const sizeSlider = document.getElementById("sizeSlider");
       const objectImageInput = document.getElementById("objectImageInput");
       const playButton = document.getElementById("playButton");
+      const fireButton = document.getElementById("fireButton");
 
       // Global game variables.
-      let difficulty = 5; // Maximum spawn batch from difficulty slider.
-      let spawnInterval = 2000; // Milliseconds between spawn events.
+      let difficulty = 5; // Maximum spawn count from slider.
+      let spawnInterval = 2000; // Milliseconds between spawning events.
       let lastSpawnTime = 0;
       let objects = [];
       let misses = 0;
-      let score = 0; // Score mechanism: starts at zero.
+      let score = 0;
       const maxMisses = 10;
       let gameOver = false;
       let lastTime = performance.now();
-      let gameStartTime = 0; // Used to scale spawn batch size over time.
+      let gameStartTime = 0; // For managing spawn batches.
 
-      // Pointer coordinates relative to the canvas.
+      // New adjustable factors from the sliders.
+      let speedFactor = 1.0;
+      let targetSizeFactor = 1.0;
+
+      // Pointer coordinates relative to canvas.
       let pointerX = canvas.width / 2;
       let pointerY = canvas.height / 2;
 
-      // Scale factor for the scope image (values less than 1.0 makes it smaller).
+      // Scale factor for the scope image (make it smaller).
       const scopeScaleFactor = 0.75;
 
       let tiltOffset = 0;  // Adjusted by device orientation events.
 
-      // Load assets – ensure file paths point to the "image" folder.
+      // Load assets – ensure image files are in the "image" folder.
       const scopeImage = new Image();
       scopeImage.src = "image/scope.png";
       const bulletShotImg = new Image();
@@ -110,7 +148,7 @@
       const objectImage = new Image();
       objectImage.src = "image/default_object.png";
 
-      // When the user uploads an image, update the object image.
+      // Update the object image on upload.
       objectImageInput.addEventListener("change", (e) => {
         const file = e.target.files[0];
         if (file) {
@@ -124,7 +162,10 @@
 
       // Start the game on Play button click.
       playButton.addEventListener("click", () => {
+        // Read slider values
         difficulty = parseInt(difficultySlider.value);
+        speedFactor = parseFloat(speedSlider.value);
+        targetSizeFactor = parseFloat(sizeSlider.value);
         spawnInterval = 3000 / difficulty;
         overlay.style.display = "none";
         gameStartTime = performance.now();
@@ -144,7 +185,7 @@
         }
       }
 
-      // Update pointer based on mouse and touch events.
+      // Listen for pointer movement.
       canvas.addEventListener("mousemove", updatePointer);
       canvas.addEventListener("touchmove", (e) => {
         updatePointer(e);
@@ -155,37 +196,32 @@
       function handleShoot() {
         if (gameOver) return;
         let shotHit = false;
-        // Loop through targets to see if the shot hit any.
         for (let i = objects.length - 1; i >= 0; i--) {
           const obj = objects[i];
           const dx = pointerX - obj.x;
           const dy = pointerY - obj.y;
           const dist = Math.sqrt(dx * dx + dy * dy);
-          // Only count hit if the target hasn't already been hit.
           if (!obj.hit && dist < obj.radius) {
             shotHit = true;
             obj.hit = true;
             obj.hitTime = performance.now();
             obj.fallSpeed = 0;
-            // Increase score by 1 (or any value you'd like per hit).
-            score += 1;
+            score += 10; // Increase score per successful hit.
           }
         }
-        // If shot did not hit any target, record a miss.
+        // If no target was hit, record a miss.
         if (!shotHit) {
           misses++;
           if (misses >= maxMisses) endGame();
         }
       }
 
-      // Register shot on click or tap.
+      // PC fires shot on canvas click.
       canvas.addEventListener("click", handleShoot);
-      canvas.addEventListener("touchstart", (e) => {
-        handleShoot();
-        e.preventDefault();
-      });
+      // Mobile users fire shot via the fire button.
+      fireButton.addEventListener("click", handleShoot);
 
-      // Use device orientation for a slight tilt effect.
+      // Device orientation for a slight tilt effect.
       if (window.DeviceOrientationEvent) {
         window.addEventListener("deviceorientation", (event) => {
           tiltOffset = (event.gamma || 0) / 30;
@@ -194,30 +230,31 @@
 
       // Spawn a new target.
       function spawnObject() {
-        const radius = 30;
-        // Target spawns within the center half of the canvas.
+        // Base radius scaled by targetSizeFactor.
+        const radius = 30 * targetSizeFactor;
+        // Spawn within the center half of the canvas.
         const x = Math.random() * (canvas.width / 2) + canvas.width / 4;
-        // Spawn at ground level (the bottom of the canvas).
-        const y = canvas.height - radius;
-        // A higher jump: stronger upward velocity.
-        const speedY = - (Math.random() * 4 + 10); // Between -10 and -14.
-        const speedX = (Math.random() * 2 - 1);  // Small horizontal variation.
+        const y = canvas.height - radius; // Ground level.
+        // Initial upward velocity: do NOT multiply by speedFactor (to keep jump height constant).
+        const speedY = -(Math.random() * 4 + 10);
+        // Horizontal speed is affected by speedFactor.
+        const speedX = (Math.random() * 2 - 1) * speedFactor;
         objects.push({ x, y, radius, speedX, speedY, hit: false, hitTime: null });
       }
 
       // Update game objects.
       function update(deltaTime) {
         const now = performance.now();
-
-        // Calculate spawn batch based on elapsed game time.
-        // Every 10 seconds, the number of simultaneously spawned targets increases by 1,
-        // up to the maximum defined by the difficulty slider.
-        const elapsedTime = now - gameStartTime;
-        const spawnBatchCount = Math.min(Math.floor(elapsedTime / 10000) + 1, difficulty);
-
-        // Spawn targets based on spawnInterval.
-        if (now - lastSpawnTime > spawnInterval) {
-          for (let i = 0; i < spawnBatchCount; i++) {
+        
+        // Spawn new targets if there are fewer than 10 on screen.
+        if (objects.length < 10 && now - lastSpawnTime > spawnInterval) {
+          // Determine a random spawn count between 1 and the difficulty value.
+          let spawnCount = Math.floor(Math.random() * difficulty) + 1;
+          // Ensure total objects do not exceed 10.
+          if (objects.length + spawnCount > 10) {
+            spawnCount = 10 - objects.length;
+          }
+          for (let i = 0; i < spawnCount; i++) {
             spawnObject();
           }
           lastSpawnTime = now;
@@ -230,26 +267,30 @@
         for (let i = objects.length - 1; i >= 0; i--) {
           const obj = objects[i];
           if (obj.hit) {
-            // If hit, target falls straight down.
+            // Once shot, the target falls straight down.
             obj.y += obj.fallSpeed;
-            obj.fallSpeed += gravity * 2;
+            obj.fallSpeed += gravity * 2 * speedFactor;
           } else {
-            // Normal jump motion.
+            // Normal jump motion (vertical movement unchanged so jump height stays fixed).
             obj.y += obj.speedY;
             obj.x += obj.speedX + tiltOffset;
             obj.speedY += gravity;
           }
-          // Remove the target if it exits the canvas bounds.
+          // When an object reaches below the canvas bounds, remove it.
+          // Also record a miss if the target was not hit.
           if (obj.y - obj.radius > canvas.height ||
               obj.x < -obj.radius ||
               obj.x > canvas.width + obj.radius) {
-            // Falling targets do not add a miss.
+            if (!obj.hit) {
+              misses++;
+              if (misses >= maxMisses) endGame();
+            }
             objects.splice(i, 1);
           }
         }
       }
 
-      // Draw each target (with circular cropping), and overlay the bullet shot image for hit targets.
+      // Draw each target with a circular crop. If hit, overlay the bullet shot image.
       function drawObject(obj) {
         ctx.save();
         ctx.beginPath();
@@ -266,17 +307,16 @@
       // Draw all game elements.
       function draw() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        // Draw each target.
         for (const obj of objects) {
           drawObject(obj);
         }
-        // Draw the scope immediately at the pointer position.
+        // Draw the scope at the current pointer position.
         if (scopeImage.complete) {
           const scopeWidth = scopeImage.width * scopeScaleFactor;
           const scopeHeight = scopeImage.height * scopeScaleFactor;
           ctx.drawImage(scopeImage, pointerX - scopeWidth / 2, pointerY - scopeHeight / 2, scopeWidth, scopeHeight);
         } else {
-          // Fallback: simple crosshairs.
+          // Fallback crosshairs.
           ctx.beginPath();
           ctx.moveTo(pointerX - 20, pointerY);
           ctx.lineTo(pointerX + 20, pointerY);
@@ -286,7 +326,7 @@
           ctx.lineWidth = 2;
           ctx.stroke();
         }
-        // Display the scoreboard (misses and score).
+        // Render the scoreboard.
         ctx.fillStyle = "black";
         ctx.font = "20px Arial";
         ctx.fillText(`Misses: ${misses}/${maxMisses}   Score: ${score}`, 20, 30);
