@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Sniping Game with Score</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    /* Container for the game screen */
+    #gameContainer {
+      position: relative;
+      margin: 50px auto;
+      width: 800px;
+      height: 600px;
+      border: 2px solid #333;
+      background: #fff;
+      overflow: hidden;
+      box-shadow: 0 0 10px rgba(0,0,0,0.5);
+    }
+    /* The canvas fills the container */
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+    /* Overlay for game configuration inside the container */
+    #overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.8);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      z-index: 10;
+    }
+    #overlayContent {
+      background: #fff;
+      padding: 20px;
+      border-radius: 8px;
+      text-align: center;
+    }
+    #overlayContent input,
+    #overlayContent button {
+      margin: 10px 0;
+      font-size: 16px;
+    }
+  </style>
+</head>
+<body>
+  <div id="gameContainer">
+    <!-- Overlay for game configuration -->
+    <div id="overlay">
+      <div id="overlayContent">
+        <h1>Sniping Game Setup</h1>
+        <div>
+          <label for="difficultySlider">Difficulty (max spawn count):</label><br>
+          <input type="range" id="difficultySlider" min="1" max="10" value="5">
+        </div>
+        <div>
+          <label for="objectImageInput">Upload Object Image:</label><br>
+          <input type="file" id="objectImageInput" accept="image/*">
+        </div>
+        <button id="playButton">Play</button>
+        <p style="font-size: 14px; color: gray;">(10 misses = game over)</p>
+      </div>
+    </div>
+    <!-- The game canvas -->
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+  </div>
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      const container = document.getElementById("gameContainer");
+      const canvas = document.getElementById("gameCanvas");
+      const ctx = canvas.getContext("2d");
+
+      // Overlay and setup elements:
+      const overlay = document.getElementById("overlay");
+      const difficultySlider = document.getElementById("difficultySlider");
+      const objectImageInput = document.getElementById("objectImageInput");
+      const playButton = document.getElementById("playButton");
+
+      // Global game variables.
+      let difficulty = 5; // Maximum spawn batch from difficulty slider.
+      let spawnInterval = 2000; // Milliseconds between spawn events.
+      let lastSpawnTime = 0;
+      let objects = [];
+      let misses = 0;
+      let score = 0; // Score mechanism: starts at zero.
+      const maxMisses = 10;
+      let gameOver = false;
+      let lastTime = performance.now();
+      let gameStartTime = 0; // Used to scale spawn batch size over time.
+
+      // Pointer coordinates relative to the canvas.
+      let pointerX = canvas.width / 2;
+      let pointerY = canvas.height / 2;
+
+      // Scale factor for the scope image (values less than 1.0 makes it smaller).
+      const scopeScaleFactor = 0.75;
+
+      let tiltOffset = 0;  // Adjusted by device orientation events.
+
+      // Load assets – ensure file paths point to the "image" folder.
+      const scopeImage = new Image();
+      scopeImage.src = "image/scope.png";
+      const bulletShotImg = new Image();
+      bulletShotImg.src = "image/bullet_shot.png";
+      const objectImage = new Image();
+      objectImage.src = "image/default_object.png";
+
+      // When the user uploads an image, update the object image.
+      objectImageInput.addEventListener("change", (e) => {
+        const file = e.target.files[0];
+        if (file) {
+          const reader = new FileReader();
+          reader.onload = (event) => {
+            objectImage.src = event.target.result;
+          };
+          reader.readAsDataURL(file);
+        }
+      });
+
+      // Start the game on Play button click.
+      playButton.addEventListener("click", () => {
+        difficulty = parseInt(difficultySlider.value);
+        spawnInterval = 3000 / difficulty;
+        overlay.style.display = "none";
+        gameStartTime = performance.now();
+        lastTime = performance.now();
+        requestAnimationFrame(gameLoop);
+      });
+
+      // Update pointer position relative to the canvas.
+      function updatePointer(evt) {
+        const rect = canvas.getBoundingClientRect();
+        if (evt.touches) {
+          pointerX = evt.touches[0].clientX - rect.left;
+          pointerY = evt.touches[0].clientY - rect.top;
+        } else {
+          pointerX = evt.clientX - rect.left;
+          pointerY = evt.clientY - rect.top;
+        }
+      }
+
+      // Update pointer based on mouse and touch events.
+      canvas.addEventListener("mousemove", updatePointer);
+      canvas.addEventListener("touchmove", (e) => {
+        updatePointer(e);
+        e.preventDefault();
+      });
+
+      // When the user fires a shot, check for a hit.
+      function handleShoot() {
+        if (gameOver) return;
+        let shotHit = false;
+        // Loop through targets to see if the shot hit any.
+        for (let i = objects.length - 1; i >= 0; i--) {
+          const obj = objects[i];
+          const dx = pointerX - obj.x;
+          const dy = pointerY - obj.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          // Only count hit if the target hasn't already been hit.
+          if (!obj.hit && dist < obj.radius) {
+            shotHit = true;
+            obj.hit = true;
+            obj.hitTime = performance.now();
+            obj.fallSpeed = 0;
+            // Increase score by 1 (or any value you'd like per hit).
+            score += 1;
+          }
+        }
+        // If shot did not hit any target, record a miss.
+        if (!shotHit) {
+          misses++;
+          if (misses >= maxMisses) endGame();
+        }
+      }
+
+      // Register shot on click or tap.
+      canvas.addEventListener("click", handleShoot);
+      canvas.addEventListener("touchstart", (e) => {
+        handleShoot();
+        e.preventDefault();
+      });
+
+      // Use device orientation for a slight tilt effect.
+      if (window.DeviceOrientationEvent) {
+        window.addEventListener("deviceorientation", (event) => {
+          tiltOffset = (event.gamma || 0) / 30;
+        });
+      }
+
+      // Spawn a new target.
+      function spawnObject() {
+        const radius = 30;
+        // Target spawns within the center half of the canvas.
+        const x = Math.random() * (canvas.width / 2) + canvas.width / 4;
+        // Spawn at ground level (the bottom of the canvas).
+        const y = canvas.height - radius;
+        // A higher jump: stronger upward velocity.
+        const speedY = - (Math.random() * 4 + 10); // Between -10 and -14.
+        const speedX = (Math.random() * 2 - 1);  // Small horizontal variation.
+        objects.push({ x, y, radius, speedX, speedY, hit: false, hitTime: null });
+      }
+
+      // Update game objects.
+      function update(deltaTime) {
+        const now = performance.now();
+
+        // Calculate spawn batch based on elapsed game time.
+        // Every 10 seconds, the number of simultaneously spawned targets increases by 1,
+        // up to the maximum defined by the difficulty slider.
+        const elapsedTime = now - gameStartTime;
+        const spawnBatchCount = Math.min(Math.floor(elapsedTime / 10000) + 1, difficulty);
+
+        // Spawn targets based on spawnInterval.
+        if (now - lastSpawnTime > spawnInterval) {
+          for (let i = 0; i < spawnBatchCount; i++) {
+            spawnObject();
+          }
+          lastSpawnTime = now;
+          spawnInterval *= 0.99;
+          if (spawnInterval < 500) spawnInterval = 500;
+        }
+
+        const gravity = 0.2;
+        // Update each target.
+        for (let i = objects.length - 1; i >= 0; i--) {
+          const obj = objects[i];
+          if (obj.hit) {
+            // If hit, target falls straight down.
+            obj.y += obj.fallSpeed;
+            obj.fallSpeed += gravity * 2;
+          } else {
+            // Normal jump motion.
+            obj.y += obj.speedY;
+            obj.x += obj.speedX + tiltOffset;
+            obj.speedY += gravity;
+          }
+          // Remove the target if it exits the canvas bounds.
+          if (obj.y - obj.radius > canvas.height ||
+              obj.x < -obj.radius ||
+              obj.x > canvas.width + obj.radius) {
+            // Falling targets do not add a miss.
+            objects.splice(i, 1);
+          }
+        }
+      }
+
+      // Draw each target (with circular cropping), and overlay the bullet shot image for hit targets.
+      function drawObject(obj) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(obj.x, obj.y, obj.radius, 0, Math.PI * 2);
+        ctx.closePath();
+        ctx.clip();
+        ctx.drawImage(objectImage, obj.x - obj.radius, obj.y - obj.radius, obj.radius * 2, obj.radius * 2);
+        ctx.restore();
+        if (obj.hit) {
+          ctx.drawImage(bulletShotImg, obj.x - obj.radius, obj.y - obj.radius, obj.radius * 2, obj.radius * 2);
+        }
+      }
+
+      // Draw all game elements.
+      function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // Draw each target.
+        for (const obj of objects) {
+          drawObject(obj);
+        }
+        // Draw the scope immediately at the pointer position.
+        if (scopeImage.complete) {
+          const scopeWidth = scopeImage.width * scopeScaleFactor;
+          const scopeHeight = scopeImage.height * scopeScaleFactor;
+          ctx.drawImage(scopeImage, pointerX - scopeWidth / 2, pointerY - scopeHeight / 2, scopeWidth, scopeHeight);
+        } else {
+          // Fallback: simple crosshairs.
+          ctx.beginPath();
+          ctx.moveTo(pointerX - 20, pointerY);
+          ctx.lineTo(pointerX + 20, pointerY);
+          ctx.moveTo(pointerX, pointerY - 20);
+          ctx.lineTo(pointerX, pointerY + 20);
+          ctx.strokeStyle = "red";
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
+        // Display the scoreboard (misses and score).
+        ctx.fillStyle = "black";
+        ctx.font = "20px Arial";
+        ctx.fillText(`Misses: ${misses}/${maxMisses}   Score: ${score}`, 20, 30);
+      }
+
+      // End the game.
+      function endGame() {
+        gameOver = true;
+        alert("Game Over! Refresh the page to restart.");
+      }
+
+      // Main game loop.
+      function gameLoop(now = performance.now()) {
+        if (gameOver) return;
+        const deltaTime = now - lastTime;
+        lastTime = now;
+        update(deltaTime);
+        draw();
+        requestAnimationFrame(gameLoop);
+      }
+    });
+  </script>
+</body>
+</html>
