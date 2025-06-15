@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Sniping Game – Mobile Fire Button & Enhanced Difficulty</title>
+  <title>Sniping Game – Mobile Joystick & Fire Button</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
     /* Container for the game screen */
@@ -22,7 +22,7 @@
       height: 100%;
       display: block;
     }
-    /* Overlay for game configuration inside the container */
+    /* Overlay for game configuration */
     #overlay {
       position: absolute;
       top: 0;
@@ -33,7 +33,7 @@
       display: flex;
       justify-content: center;
       align-items: center;
-      z-index: 20;
+      z-index: 30;
     }
     #overlayContent {
       background: #fff;
@@ -47,21 +47,65 @@
       margin: 10px 0;
       font-size: 16px;
     }
-    /* Fire button: hidden by default (for desktop) and visible on touch devices */
-    #fireButton {
+    /* Mobile controls: trackpad (joystick) and fire button.
+       They will be shown on mobile devices only. */
+    #trackpad {
       position: absolute;
-      bottom: 20px;
-      left: 50%;
-      transform: translateX(-50%);
-      padding: 10px 20px;
-      font-size: 18px;
-      z-index: 15;
+      background: rgba(0,0,0,0.2);
+      border: 2px solid #999;
+      border-radius: 50%;
+      touch-action: none;
+      z-index: 25;
       display: none;
     }
-    /* Show fire button on touch devices */
+    #fireButton {
+      position: absolute;
+      background: #e74c3c;
+      color: #fff;
+      border: none;
+      border-radius: 50%;
+      z-index: 25;
+      display: none;
+    }
+    /* Show mobile controls on touch devices */
     @media (hover: none) and (pointer: coarse) {
-      #fireButton {
+      #trackpad, #fireButton {
         display: block;
+      }
+    }
+    /* Orientation-specific styling */
+    /* Portrait mode: joystick at bottom left, fire at bottom right */
+    @media (orientation: portrait) {
+      #trackpad {
+        width: 150px;
+        height: 150px;
+        bottom: 20px;
+        left: 20px;
+      }
+      #fireButton {
+        width: 100px;
+        height: 100px;
+        bottom: 20px;
+        right: 20px;
+        font-size: 24px;
+      }
+    }
+    /* Landscape mode: joystick on left-center, fire on right-center */
+    @media (orientation: landscape) {
+      #trackpad {
+        width: 150px;
+        height: 150px;
+        left: 20px;
+        top: 50%;
+        transform: translateY(-50%);
+      }
+      #fireButton {
+        width: 100px;
+        height: 100px;
+        right: 20px;
+        top: 50%;
+        transform: translateY(-50%);
+        font-size: 24px;
       }
     }
   </style>
@@ -77,7 +121,7 @@
           <input type="range" id="difficultySlider" min="1" max="10" value="5">
         </div>
         <div>
-          <label for="speedSlider">Speed Factor (affects horizontal and fall speed):</label><br>
+          <label for="speedSlider">Speed Factor (affects horizontal &amp; fall speed):</label><br>
           <input type="range" id="speedSlider" min="0.5" max="2.0" step="0.1" value="1.0">
         </div>
         <div>
@@ -95,8 +139,9 @@
 
     <!-- The game canvas -->
     <canvas id="gameCanvas" width="800" height="600"></canvas>
-    
-    <!-- Fire button for mobile users -->
+
+    <!-- Mobile controls: Trackpad (joystick) and Fire Button -->
+    <div id="trackpad"></div>
     <button id="fireButton">Fire</button>
   </div>
 
@@ -106,7 +151,7 @@
       const canvas = document.getElementById("gameCanvas");
       const ctx = canvas.getContext("2d");
 
-      // Overlay and setup elements:
+      // Overlay and setup elements
       const overlay = document.getElementById("overlay");
       const difficultySlider = document.getElementById("difficultySlider");
       const speedSlider = document.getElementById("speedSlider");
@@ -114,10 +159,11 @@
       const objectImageInput = document.getElementById("objectImageInput");
       const playButton = document.getElementById("playButton");
       const fireButton = document.getElementById("fireButton");
+      const trackpad = document.getElementById("trackpad");
 
-      // Global game variables.
+      // Global game variables
       let difficulty = 5; // Maximum spawn count from slider.
-      let spawnInterval = 2000; // Milliseconds between spawning events.
+      let spawnInterval = 2000;
       let lastSpawnTime = 0;
       let objects = [];
       let misses = 0;
@@ -125,22 +171,27 @@
       const maxMisses = 10;
       let gameOver = false;
       let lastTime = performance.now();
-      let gameStartTime = 0; // For managing spawn batches.
+      let gameStartTime = 0;
 
-      // New adjustable factors from the sliders.
+      // Adjustable factors from sliders.
       let speedFactor = 1.0;
       let targetSizeFactor = 1.0;
 
-      // Pointer coordinates relative to canvas.
+      // For PC: scope follows mouse. For mobile, joystick will control scope.
       let pointerX = canvas.width / 2;
       let pointerY = canvas.height / 2;
 
-      // Scale factor for the scope image (make it smaller).
+      // Mobile joystick variables (only used if device is mobile)
+      let joystickOrigin = { x: pointerX, y: pointerY };
+      let joystickActive = false;
+      const joystickSensitivity = 1.0; // Adjust as needed.
+
+      // Scale factor for the scope image.
       const scopeScaleFactor = 0.75;
 
-      let tiltOffset = 0;  // Adjusted by device orientation events.
+      let tiltOffset = 0; // For device orientation.
 
-      // Load assets – ensure image files are in the "image" folder.
+      // Load assets (ensure paths point to your "image" folder)
       const scopeImage = new Image();
       scopeImage.src = "image/scope.png";
       const bulletShotImg = new Image();
@@ -148,7 +199,7 @@
       const objectImage = new Image();
       objectImage.src = "image/default_object.png";
 
-      // Update the object image on upload.
+      // Update object image on upload.
       objectImageInput.addEventListener("change", (e) => {
         const file = e.target.files[0];
         if (file) {
@@ -160,39 +211,62 @@
         }
       });
 
-      // Start the game on Play button click.
-      playButton.addEventListener("click", () => {
-        // Read slider values
-        difficulty = parseInt(difficultySlider.value);
-        speedFactor = parseFloat(speedSlider.value);
-        targetSizeFactor = parseFloat(sizeSlider.value);
-        spawnInterval = 3000 / difficulty;
-        overlay.style.display = "none";
-        gameStartTime = performance.now();
-        lastTime = performance.now();
-        requestAnimationFrame(gameLoop);
-      });
+      // Detect if device is mobile.
+      const isMobile = ("ontouchstart" in window);
 
-      // Update pointer position relative to the canvas.
-      function updatePointer(evt) {
-        const rect = canvas.getBoundingClientRect();
-        if (evt.touches) {
-          pointerX = evt.touches[0].clientX - rect.left;
-          pointerY = evt.touches[0].clientY - rect.top;
-        } else {
-          pointerX = evt.clientX - rect.left;
-          pointerY = evt.clientY - rect.top;
-        }
+      // PC controls: update pointer with mouse and fire on canvas click.
+      if (!isMobile) {
+        canvas.addEventListener("mousemove", updatePointer);
+        canvas.addEventListener("click", handleShoot);
+      }
+      // Mobile fire button.
+      fireButton.addEventListener("click", handleShoot);
+
+      // Device orientation for slight tilt.
+      if (window.DeviceOrientationEvent) {
+        window.addEventListener("deviceorientation", (event) => {
+          tiltOffset = (event.gamma || 0) / 30;
+        });
       }
 
-      // Listen for pointer movement.
-      canvas.addEventListener("mousemove", updatePointer);
-      canvas.addEventListener("touchmove", (e) => {
-        updatePointer(e);
-        e.preventDefault();
-      });
+      // Mobile joystick (trackpad) controls.
+      if (isMobile) {
+        trackpad.addEventListener("touchstart", (e) => {
+          e.preventDefault();
+          joystickActive = true;
+          const rect = trackpad.getBoundingClientRect();
+          const centerX = rect.left + rect.width / 2;
+          const centerY = rect.top + rect.height / 2;
+          joystickOrigin = { x: pointerX, y: pointerY };
+        });
+        trackpad.addEventListener("touchmove", (e) => {
+          e.preventDefault();
+          if (!joystickActive) return;
+          const touch = e.touches[0];
+          const rect = trackpad.getBoundingClientRect();
+          const centerX = rect.left + rect.width / 2;
+          const centerY = rect.top + rect.height / 2;
+          const deltaX = (touch.clientX - centerX) * joystickSensitivity;
+          const deltaY = (touch.clientY - centerY) * joystickSensitivity;
+          pointerX = joystickOrigin.x + deltaX;
+          pointerY = joystickOrigin.y + deltaY;
+          // Clamp pointer position within the canvas.
+          pointerX = Math.max(0, Math.min(canvas.width, pointerX));
+          pointerY = Math.max(0, Math.min(canvas.height, pointerY));
+        });
+        trackpad.addEventListener("touchend", (e) => {
+          joystickActive = false;
+        });
+      }
 
-      // When the user fires a shot, check for a hit.
+      // PC pointer update.
+      function updatePointer(evt) {
+        const rect = canvas.getBoundingClientRect();
+        pointerX = evt.clientX - rect.left;
+        pointerY = evt.clientY - rect.top;
+      }
+
+      // When the user fires a shot.
       function handleShoot() {
         if (gameOver) return;
         let shotHit = false;
@@ -206,38 +280,23 @@
             obj.hit = true;
             obj.hitTime = performance.now();
             obj.fallSpeed = 0;
-            score += 10; // Increase score per successful hit.
+            score += 10;
           }
         }
-        // If no target was hit, record a miss.
         if (!shotHit) {
           misses++;
           if (misses >= maxMisses) endGame();
         }
       }
 
-      // PC fires shot on canvas click.
-      canvas.addEventListener("click", handleShoot);
-      // Mobile users fire shot via the fire button.
-      fireButton.addEventListener("click", handleShoot);
-
-      // Device orientation for a slight tilt effect.
-      if (window.DeviceOrientationEvent) {
-        window.addEventListener("deviceorientation", (event) => {
-          tiltOffset = (event.gamma || 0) / 30;
-        });
-      }
-
       // Spawn a new target.
       function spawnObject() {
-        // Base radius scaled by targetSizeFactor.
         const radius = 30 * targetSizeFactor;
-        // Spawn within the center half of the canvas.
         const x = Math.random() * (canvas.width / 2) + canvas.width / 4;
-        const y = canvas.height - radius; // Ground level.
-        // Initial upward velocity: do NOT multiply by speedFactor (to keep jump height constant).
+        const y = canvas.height - radius;
+        // Vertical jump speed (kept constant so jump height doesn’t change)
         const speedY = -(Math.random() * 4 + 10);
-        // Horizontal speed is affected by speedFactor.
+        // Horizontal speed is affected by the speedFactor.
         const speedX = (Math.random() * 2 - 1) * speedFactor;
         objects.push({ x, y, radius, speedX, speedY, hit: false, hitTime: null });
       }
@@ -245,12 +304,9 @@
       // Update game objects.
       function update(deltaTime) {
         const now = performance.now();
-        
-        // Spawn new targets if there are fewer than 10 on screen.
+        // Spawn targets if there are fewer than 10 on screen.
         if (objects.length < 10 && now - lastSpawnTime > spawnInterval) {
-          // Determine a random spawn count between 1 and the difficulty value.
           let spawnCount = Math.floor(Math.random() * difficulty) + 1;
-          // Ensure total objects do not exceed 10.
           if (objects.length + spawnCount > 10) {
             spawnCount = 10 - objects.length;
           }
@@ -261,26 +317,22 @@
           spawnInterval *= 0.99;
           if (spawnInterval < 500) spawnInterval = 500;
         }
-
         const gravity = 0.2;
-        // Update each target.
         for (let i = objects.length - 1; i >= 0; i--) {
           const obj = objects[i];
           if (obj.hit) {
-            // Once shot, the target falls straight down.
             obj.y += obj.fallSpeed;
             obj.fallSpeed += gravity * 2 * speedFactor;
           } else {
-            // Normal jump motion (vertical movement unchanged so jump height stays fixed).
             obj.y += obj.speedY;
             obj.x += obj.speedX + tiltOffset;
             obj.speedY += gravity;
           }
-          // When an object reaches below the canvas bounds, remove it.
-          // Also record a miss if the target was not hit.
-          if (obj.y - obj.radius > canvas.height ||
-              obj.x < -obj.radius ||
-              obj.x > canvas.width + obj.radius) {
+          if (
+            obj.y - obj.radius > canvas.height ||
+            obj.x < -obj.radius ||
+            obj.x > canvas.width + obj.radius
+          ) {
             if (!obj.hit) {
               misses++;
               if (misses >= maxMisses) endGame();
@@ -290,17 +342,29 @@
         }
       }
 
-      // Draw each target with a circular crop. If hit, overlay the bullet shot image.
+      // Draw each target.
       function drawObject(obj) {
         ctx.save();
         ctx.beginPath();
         ctx.arc(obj.x, obj.y, obj.radius, 0, Math.PI * 2);
         ctx.closePath();
         ctx.clip();
-        ctx.drawImage(objectImage, obj.x - obj.radius, obj.y - obj.radius, obj.radius * 2, obj.radius * 2);
+        ctx.drawImage(
+          objectImage,
+          obj.x - obj.radius,
+          obj.y - obj.radius,
+          obj.radius * 2,
+          obj.radius * 2
+        );
         ctx.restore();
         if (obj.hit) {
-          ctx.drawImage(bulletShotImg, obj.x - obj.radius, obj.y - obj.radius, obj.radius * 2, obj.radius * 2);
+          ctx.drawImage(
+            bulletShotImg,
+            obj.x - obj.radius,
+            obj.y - obj.radius,
+            obj.radius * 2,
+            obj.radius * 2
+          );
         }
       }
 
@@ -310,13 +374,17 @@
         for (const obj of objects) {
           drawObject(obj);
         }
-        // Draw the scope at the current pointer position.
         if (scopeImage.complete) {
           const scopeWidth = scopeImage.width * scopeScaleFactor;
           const scopeHeight = scopeImage.height * scopeScaleFactor;
-          ctx.drawImage(scopeImage, pointerX - scopeWidth / 2, pointerY - scopeHeight / 2, scopeWidth, scopeHeight);
+          ctx.drawImage(
+            scopeImage,
+            pointerX - scopeWidth / 2,
+            pointerY - scopeHeight / 2,
+            scopeWidth,
+            scopeHeight
+          );
         } else {
-          // Fallback crosshairs.
           ctx.beginPath();
           ctx.moveTo(pointerX - 20, pointerY);
           ctx.lineTo(pointerX + 20, pointerY);
@@ -326,7 +394,6 @@
           ctx.lineWidth = 2;
           ctx.stroke();
         }
-        // Render the scoreboard.
         ctx.fillStyle = "black";
         ctx.font = "20px Arial";
         ctx.fillText(`Misses: ${misses}/${maxMisses}   Score: ${score}`, 20, 30);
@@ -338,7 +405,7 @@
         alert("Game Over! Refresh the page to restart.");
       }
 
-      // Main game loop.
+      // Game loop (only starts when Play is clicked)
       function gameLoop(now = performance.now()) {
         if (gameOver) return;
         const deltaTime = now - lastTime;
@@ -347,6 +414,19 @@
         draw();
         requestAnimationFrame(gameLoop);
       }
+
+      // Start the game loop only after clicking Play.
+      playButton.addEventListener("click", () => {
+        // Read slider values.
+        difficulty = parseInt(difficultySlider.value);
+        speedFactor = parseFloat(speedSlider.value);
+        targetSizeFactor = parseFloat(sizeSlider.value);
+        spawnInterval = 3000 / difficulty;
+        overlay.style.display = "none";
+        gameStartTime = performance.now();
+        lastTime = performance.now();
+        requestAnimationFrame(gameLoop);
+      });
     });
   </script>
 </body>
